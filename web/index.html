@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ANALISIS_WASM-02 · WebAssembly en el borde</title>
+    <meta
+      name="description"
+      content="Procesamiento de imágenes RGBA en WebAssembly (C, C++, Rust) con la ABI canónica del Component Model y la ABI de Ethereum."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23070b12'/%3E%3Cpath d='M18 22h10l4 20 4-20h10' stroke='%2322d3ee' stroke-width='5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <div class="bg" aria-hidden="true"></div>
+
+    <header class="hero">
+      <div class="hero__inner">
+        <p class="eyebrow"><span class="dot"></span> Sistemas Web · WebAssembly</p>
+        <h1>
+          Procesamiento de imágenes<br />
+          <span>en WebAssembly</span>
+        </h1>
+        <p class="lede">
+          ANALISIS_WASM-02 implementado en C, C++ y Rust. Un frame RGBA, tres kernels y dos
+          fronteras de datos: la <strong>ABI canónica</strong> del Component Model y la
+          <strong>ABI de Ethereum</strong>.
+        </p>
+        <ul class="chips" aria-label="Temas">
+          <li>C</li>
+          <li>C++</li>
+          <li>Rust</li>
+          <li>ABI canónica</li>
+          <li>ABI Ethereum</li>
+        </ul>
+
+        <nav class="tabs" role="tablist" aria-label="Secciones">
+          <button class="tab is-active" role="tab" aria-selected="true" data-panel="demo">
+            Demo WASM
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-panel="canonical">
+            ABI canónica
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-panel="ethereum">
+            ABI Ethereum
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-panel="architecture">
+            Arquitectura
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <div id="boot-error" class="boot-error" hidden>
+      <strong>No se pudieron cargar los módulos.</strong>
+      <span id="boot-error-detail"></span>
+    </div>
+
+    <main>
+      <!-- ============================ DEMO ============================ -->
+      <section class="panel is-active" id="panel-demo" role="tabpanel" aria-label="Demo WASM">
+        <div class="demo-grid">
+          <article class="card canvas-card">
+            <div class="card__head">
+              <h2>Frame RGBA</h2>
+              <span class="pill" id="backend-label">C · wasm</span>
+            </div>
+
+            <div class="canvas-wrap">
+              <canvas id="canvas" width="640" height="480" aria-label="Frame procesado"></canvas>
+              <span class="canvas-badge" id="canvas-badge">patrón sintético</span>
+            </div>
+
+            <div class="toolbar">
+              <label class="field">
+                <span>Fuente</span>
+                <select id="source-select">
+                  <option value="pattern">Patrón sintético</option>
+                  <option value="camera">Cámara web</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Implementación</span>
+                <select id="backend-select">
+                  <option value="c">C · puntero a función</option>
+                  <option value="cpp">C++ · virtual</option>
+                  <option value="js">JavaScript</option>
+                </select>
+              </label>
+
+              <label class="check">
+                <input type="checkbox" id="running" checked />
+                <span>Procesar</span>
+              </label>
+
+              <button class="btn btn--primary" id="compare" type="button">
+                Comparar backends
+              </button>
+              <button class="btn" id="verify" type="button">Verificar píxeles</button>
+            </div>
+
+            <p class="hint" id="demo-status" aria-live="polite">
+              Escribiendo el frame en la memoria lineal y llamando a
+              <code>apply_grayscale(ptr, n)</code>.
+            </p>
+          </article>
+
+          <aside class="card stats-card">
+            <h2>Telemetría</h2>
+            <div class="stats">
+              <div class="stat">
+                <span>FPS</span>
+                <strong id="stat-fps">—</strong>
+              </div>
+              <div class="stat">
+                <span>ms / frame</span>
+                <strong id="stat-ms">—</strong>
+              </div>
+              <div class="stat">
+                <span>MP/s</span>
+                <strong id="stat-mp">—</strong>
+              </div>
+              <div class="stat">
+                <span>.wasm</span>
+                <strong id="stat-size">—</strong>
+              </div>
+            </div>
+
+            <div class="meter" aria-hidden="true"><i id="meter-bar"></i></div>
+            <p class="hint">
+              Se mide solo el filtro, sin dibujar el canvas. El presupuesto de 60 fps es
+              16,7 ms por frame.
+            </p>
+
+            <div class="arch" aria-label="Flujo de datos">
+              <div class="arch__node">Cámara / patrón</div>
+              <div class="arch__arrow">ImageData RGBA</div>
+              <div class="arch__node arch__node--accent">Memoria lineal WASM</div>
+              <div class="arch__arrow">apply_grayscale(ptr, n)</div>
+              <div class="arch__node">Canvas</div>
+            </div>
+          </aside>
+        </div>
+
+        <article class="card" id="compare-card" hidden>
+          <div class="card__head">
+            <h2>Comparación de kernels</h2>
+            <span class="pill">1280 × 720 · mismo frame</span>
+          </div>
+          <div class="bars" id="compare-bars"></div>
+          <p class="hint" id="compare-note"></p>
+        </article>
+
+        <article class="card">
+          <h2>Integración sin glue code</h2>
+          <p class="muted">
+            El módulo C exporta <code>memory</code> y funciones que reciben un offset. No hay
+            Emscripten, ni <code>wasm-bindgen</code>, ni un archivo JavaScript intermedio.
+          </p>
+          <pre><code>const { memory, apply_grayscale } = instance.exports;
+
+// El búfer vive una sola vez en la memoria lineal del módulo.
+const ptr = 65536;
+new Uint8Array(memory.buffer, ptr, imageData.data.length).set(imageData.data);
+
+apply_grayscale(ptr, imageData.data.length / 4);   // in-place
+
+// Al pintar, se lee de la misma región (una copia inevitable hacia el canvas).
+imageData.data.set(new Uint8Array(memory.buffer, ptr, imageData.data.length));</code></pre>
+        </article>
+      </section>
+
+      <!-- ========================= ABI CANÓNICA ========================= -->
+      <section class="panel" id="panel-canonical" role="tabpanel" aria-label="ABI canónica">
+        <div class="rule-grid">
+          <article class="card rule">
+            <span class="rule__type">list&lt;u8&gt;</span>
+            <code>(ptr: i32, len: i32)</code>
+            <p>Los bytes viven en memoria lineal; no se serializan.</p>
+          </article>
+          <article class="card rule">
+            <span class="rule__type">string</span>
+            <code>(ptr, len) UTF-8</code>
+            <p>El largo es en bytes, no en code units de JavaScript.</p>
+          </article>
+          <article class="card rule">
+            <span class="rule__type">record</span>
+            <code>params aplanados</code>
+            <p>Los campos escalares viajan como parámetros, sin padding.</p>
+          </article>
+        </div>
+
+        <div class="demo-grid">
+          <article class="card">
+            <div class="card__head">
+              <h2>Lowering → llamada → lifting</h2>
+              <span class="pill">process_rgba</span>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Nombre del filtro</span>
+                <input id="abi-name" value="grayscale-ñandú" maxlength="40" />
+              </label>
+              <label class="field">
+                <span>Ancho</span>
+                <input id="abi-width" type="number" value="12" min="1" max="64" />
+              </label>
+              <label class="field">
+                <span>Alto</span>
+                <input id="abi-height" type="number" value="8" min="1" max="64" />
+              </label>
+              <label class="field">
+                <span>Modo</span>
+                <select id="abi-mode">
+                  <option value="0">grayscale</option>
+                  <option value="1">invert</option>
+                  <option value="2">sepia</option>
+                </select>
+              </label>
+            </div>
+
+            <button class="btn btn--primary" id="abi-run" type="button">Ejecutar</button>
+            <p class="hint" id="abi-status" aria-live="polite">
+              El string se copia una vez; los píxeles se procesan in-place.
+            </p>
+
+            <div class="steps" id="abi-steps"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>Memoria lineal</h2>
+              <span class="pill" id="abi-memory-pill">—</span>
+            </div>
+            <div class="pixel-wrap">
+              <canvas id="abi-canvas" width="12" height="8" class="pixel-canvas"></canvas>
+              <div class="kv" id="abi-summary"></div>
+            </div>
+            <pre class="hexdump" id="abi-hexdump"></pre>
+            <p class="hint">
+              El volcado empieza en el <code>ptr</code> del string y termina en el último byte
+              del <code>list&lt;u8&gt;</code>.
+            </p>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <h2>El contrato WIT</h2>
+            <span class="pill">wit/grayscale.wit</span>
+          </div>
+          <p class="muted">
+            WIT describe tipos, no memoria. La ABI canónica es la traducción entre esos tipos y
+            los <code>i32</code>/<code>ptr</code> del módulo core. En producción, wit-bindgen o
+            jco generan este código; acá se hace a mano para que sea visible.
+          </p>
+          <pre><code id="wit-code"></code></pre>
+        </article>
+      </section>
+
+      <!-- ========================= ABI ETHEREUM ========================= -->
+      <section class="panel" id="panel-ethereum" role="tabpanel" aria-label="ABI Ethereum">
+        <div class="demo-grid">
+          <article class="card">
+            <div class="card__head">
+              <h2>registerFilter(...)</h2>
+              <span class="pill">selector + argumentos</span>
+            </div>
+
+            <div class="form-grid">
+              <label class="field">
+                <span>Nombre</span>
+                <input id="eth-name" value="grayscale-ñandú" maxlength="60" />
+              </label>
+              <label class="field">
+                <span>Modo</span>
+                <select id="eth-mode">
+                  <option value="0">0 · grayscale</option>
+                  <option value="1">1 · invert</option>
+                  <option value="2">2 · sepia</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Versión (uint32)</span>
+                <input id="eth-version" type="number" value="3" min="0" />
+              </label>
+              <label class="field field--wide">
+                <span>paramsHash (bytes32)</span>
+                <input id="eth-hash" class="mono" spellcheck="false" />
+              </label>
+            </div>
+
+            <div class="toolbar">
+              <button class="btn btn--primary" id="eth-encode" type="button">Codificar</button>
+              <button class="btn" id="eth-decode" type="button">Decodificar</button>
+              <button class="btn" id="eth-random" type="button">Nuevo hash</button>
+              <button class="btn" id="eth-return-btn" type="button">Simular getFilter</button>
+            </div>
+
+            <label class="field">
+              <span>Calldata</span>
+              <textarea id="eth-calldata" class="mono" rows="4" readonly spellcheck="false"></textarea>
+            </label>
+
+            <div class="kv" id="eth-summary"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <h2>Lectura y costo</h2>
+              <span class="pill">gas intrínseco</span>
+            </div>
+            <div class="kv" id="eth-decoded"></div>
+            <div class="kv" id="eth-return"></div>
+            <div class="cost" id="eth-cost"></div>
+            <p class="hint">
+              4 gas por byte cero y 16 por byte distinto de cero, sin contar ejecución ni
+              almacenamiento. Un frame de 1 MB ya supera la mitad de un bloque de 30 M de gas.
+            </p>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <h2>Palabras de 32 bytes</h2>
+            <span class="pill" id="eth-words-pill">—</span>
+          </div>
+          <div class="table-wrap">
+            <table class="table table--words">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>offset</th>
+                  <th>tipo</th>
+                  <th>palabra</th>
+                  <th>interpretación</th>
+                </tr>
+              </thead>
+              <tbody id="eth-words-body"></tbody>
+            </table>
+          </div>
+          <p class="hint">
+            Los tipos dinámicos dejan un <strong>offset</strong> en la cabecera; el contenido
+            (largo + datos) va en la cola, alineado a 32 bytes.
+          </p>
+        </article>
+      </section>
+
+      <!-- ========================= ARQUITECTURA ========================= -->
+      <section class="panel" id="panel-architecture" role="tabpanel" aria-label="Arquitectura">
+        <div class="demo-grid">
+          <article class="card">
+            <h2>SOLID en el borde</h2>
+            <ul class="solid">
+              <li>
+                <b>SRP</b>
+                <span>Cada filtro transforma un píxel. El motor solo itera.</span>
+              </li>
+              <li>
+                <b>OCP</b>
+                <span>Agregar sepia no modifica <code>process_image</code>.</span>
+              </li>
+              <li>
+                <b>DIP</b>
+                <span>
+                  El motor depende de <code>PixelFilter</code> / <code>ImageFilter</code> /
+                  <code>trait ImageFilter</code>, no de una implementación.
+                </span>
+              </li>
+              <li>
+                <b>Borde</b>
+                <span>
+                  La inversión de dependencias real ocurre en JS: elige el backend, no el
+                  módulo.
+                </span>
+              </li>
+            </ul>
+            <pre class="flow"><code>JS host ──(ptr, len)──▶ módulo WASM ──▶ memoria lineal
+   ▲                                        │
+   └────────── resultado in-place ──────────┘</code></pre>
+          </article>
+
+          <article class="card">
+            <h2>Tres implementaciones</h2>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Lenguaje</th>
+                    <th>Contrato</th>
+                    <th>Enlace</th>
+                    <th>.wasm</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>C</td>
+                    <td>puntero a función</td>
+                    <td>ninguno</td>
+                    <td data-size="c">—</td>
+                  </tr>
+                  <tr>
+                    <td>C++</td>
+                    <td>clase abstracta</td>
+                    <td>embind (opcional)</td>
+                    <td data-size="cpp">—</td>
+                  </tr>
+                  <tr>
+                    <td>Rust</td>
+                    <td>trait</td>
+                    <td>wasm-bindgen</td>
+                    <td>—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="hint" id="manifest-note">Tamaños leídos de web/assets/manifest.json.</p>
+          </article>
+        </div>
+
+        <article class="card">
+          <h2>Dos ABIs, dos objetivos</h2>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>ABI canónica (Component Model)</th>
+                  <th>ABI de Ethereum</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Unidad</td>
+                  <td>tipos WIT: list, string, record, variant</td>
+                  <td>palabras de 32 bytes + selector de 4 bytes</td>
+                </tr>
+                <tr>
+                  <td>Dirección</td>
+                  <td>host ↔ módulo, misma memoria lineal</td>
+                  <td>cliente ↔ EVM, datos serializados</td>
+                </tr>
+                <tr>
+                  <td>Costo</td>
+                  <td>un puntero y un largo; cero copias si se diseña bien</td>
+                  <td>16 gas por byte distinto de cero</td>
+                </tr>
+                <tr>
+                  <td>Uso típico</td>
+                  <td>píxeles, audio, buffers grandes</td>
+                  <td>metadatos, permisos, hashes, pruebas</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card__head">
+            <h2>Reproducir</h2>
+            <span class="pill" id="compiler-pill">—</span>
+          </div>
+          <pre><code>npm install
+npm run dev        # http://localhost:8080
+npm test           # 23 tests: kernels + ABIs + solc
+npm run bench      # C vs C++ vs JavaScript
+
+# recompilar los .wasm (Zig, sin Emscripten)
+ZIG=/ruta/a/zig npm run build
+
+# Rust (opcional)
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+wasm-pack build src/rust --target web --release --out-dir ../../web/assets/rust
+
+# contrato
+npm run contract   # solc -> build/PixelFilterRegistry.json</code></pre>
+        </article>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        ANALISIS_WASM-02 · El módulo no conoce el DOM, ni Ethereum, ni el lenguaje del host.
+        Solo recibe bytes y devuelve bytes.
+      </p>
+      <p class="muted">C · C++ · Rust · WebAssembly Component Model · Ethereum ABI</p>
+    </footer>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

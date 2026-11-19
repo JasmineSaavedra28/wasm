@@ -1,0 +1,42 @@
+{
+  "generatedAt": "2026-11-19T05:08:25.085Z",
+  "compiler": {
+    "kind": "zig",
+    "version": "0.13.0"
+  },
+  "note": "Generado por scripts/build.mjs. Los tamaños son bytes reales del .wasm.",
+  "modules": {
+    "c": {
+      "file": "web/assets/grayscale.wasm",
+      "bytes": 2071,
+      "sha256": "994306729716606f",
+      "exports": [
+        "memory:memory",
+        "apply_grayscale:function",
+        "apply_grayscale_direct:function",
+        "process_rgba:function",
+        "apply_invert:function",
+        "apply_sepia:function",
+        "__heap_base:global"
+      ],
+      "imports": []
+    },
+    "cpp": {
+      "file": "web/assets/grayscale_cpp.wasm",
+      "bytes": 668,
+      "sha256": "783552a8937bd1ca",
+      "exports": [
+        "memory:memory",
+        "apply_grayscale_cpp:function",
+        "apply_invert_cpp:function",
+        "__heap_base:global"
+      ],
+      "imports": []
+    }
+  },
+  "rust": {
+    "source": "src/rust",
+    "built": false,
+    "howTo": "rustup target add wasm32-unknown-unknown && cargo install wasm-pack && wasm-pack build src/rust --target web --release --out-dir ../../web/assets/rust"
+  }
+}

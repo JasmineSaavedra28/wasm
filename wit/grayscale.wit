@@ -1,0 +1,32 @@
+// Contrato del componente (WebAssembly Component Model).
+// Los tipos de WIT no son tipos de ningún lenguaje: son la interfaz.
+// La ABI canónica es la regla de representación que se usa al bajar
+// (lower) y subir (lift) estos valores hacia el módulo core.
+
+package demo:grayscale@1.0.0;
+
+interface filters {
+  /// Modo del filtro. El componente no conoce las implementaciones:
+  /// solo el discriminante que viaja por la ABI.
+  enum mode {
+    grayscale,
+    invert,
+    sepia,
+  }
+
+  /// Un frame RGBA. `data.len()` debe ser width * height * 4.
+  record image {
+    data: list<u8>,
+    width: u32,
+    height: u32,
+  }
+
+  /// Devuelve la cantidad de píxeles procesados o un error legible.
+  /// `result<u32, string>` se representa como un variant: discriminante
+  /// (0 = ok, 1 = err) + payload.
+  process: func(img: image, mode: mode) -> result<u32, string>;
+}
+
+world grayscale-world {
+  export filters;
+}
